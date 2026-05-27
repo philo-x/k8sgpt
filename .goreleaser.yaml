@@ -1,0 +1,97 @@
+version: 2
+# This is an example .goreleaser.yml file with some sensible defaults.
+# Make sure to check the documentation at https://goreleaser.com
+before:
+  hooks:
+    # You may remove this if you don't use go modules.
+    - go mod tidy
+    # you may remove this if you don't need go generate
+    - go generate ./...
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.Date={{.CommitDate}}
+
+nfpms:
+  - file_name_template: "{{ .ProjectName }}_{{ .Arch }}"
+    maintainer: "K8sGPT Maintainers <contact@k8sgpt.ai>"
+    homepage: https://k8sgpt.ai
+    description: >-
+      K8sGPT is a tool for scanning your kubernetes clusters, diagnosing and triaging issues in simple english. It has SRE experience codified into it’s analyzers and helps to pull out the most relevant information to enrich it with AI.
+    license: "Apache-2.0"
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    section: utils
+    contents:
+      - src: ./LICENSE
+        dst: /usr/share/doc/k8sgpt/copyright
+        file_info:
+          mode: 0644
+
+sboms:
+  - artifacts: archive
+
+archives:
+  - format: tar.gz
+    # this name template makes the OS and Arch compatible with the results of uname.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    # use zip for windows archives
+    format_overrides:
+      - goos: windows
+        format: zip
+
+brews:
+  - name: k8sgpt
+    homepage: https://k8sgpt.ai
+    repository:
+      owner: k8sgpt-ai
+      name: homebrew-k8sgpt
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+announce:
+  slack:
+    # Whether its enabled or not.
+    #
+    # Templates: allowed (since v2.6).
+    enabled: true
+
+    # Message template to use while publishing.
+    #
+    # Default: '{{ .ProjectName }} {{ .Tag }} is out! Check it out at {{ .ReleaseURL }}'.
+    # Templates: allowed.
+    message_template: "{{ .ProjectName }} release {{.Tag}} is out!"
+
+    # The name of the channel that the user selected as a destination for webhook messages.
+    channel: "#general"
+
+    # Set your Webhook's user name.
+    username: "K8sGPT"
+
+    # Emoji to use as the icon for this message. Overrides icon_url.
+    icon_emoji: ""
+
+    # URL to an image to use as the icon for this message.
+    icon_url: ""
+

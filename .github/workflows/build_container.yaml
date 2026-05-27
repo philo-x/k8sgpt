@@ -1,0 +1,114 @@
+name: Build container
+
+on:
+  push:
+    branches:
+      - 'main'
+      - '[0-9]+.[1-9][0-9]*.x'
+  pull_request:
+    branches:
+      - 'main'
+      - fix/build-branch
+      - '[0-9]+.[1-9][0-9]*.x'
+    paths-ignore:
+      - "**.md"
+
+env:
+  GO_VERSION: "~1.24"
+  IMAGE_NAME: "k8sgpt"
+  REGISTRY_IMAGE: ghcr.io/k8sgpt-ai/k8sgpt
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare_ci_run:
+    name: Prepare CI Run
+    runs-on: ubuntu-latest
+    outputs:
+      GIT_SHA: ${{ steps.extract_branch.outputs.GIT_SHA }}
+      BRANCH: ${{ steps.extract_branch.outputs.BRANCH }}
+      BRANCH_SLUG: ${{ steps.extract_branch.outputs.BRANCH_SLUG }}
+      DATETIME: ${{ steps.get_datetime.outputs.DATETIME }}
+      BUILD_TIME: ${{ steps.get_datetime.outputs.BUILD_TIME }}
+      NON_FORKED_AND_NON_ROBOT_RUN: ${{ steps.get_run_type.outputs.NON_FORKED_AND_NON_ROBOT_RUN }}
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Extract branch name
+        id: extract_branch
+        uses: keptn/gh-action-extract-branch-name@main
+
+      - name: Get current date and time
+        id: get_datetime
+        run: |
+          DATETIME=$(date +'%Y%m%d%H%M')
+          BUILD_TIME=$(date -u "+%F_%T")
+          echo "DATETIME=$DATETIME" >> "$GITHUB_OUTPUT"
+          echo "BUILD_TIME=$BUILD_TIME" >> "$GITHUB_OUTPUT"
+
+      - name: Get workflow run type
+        id: get_run_type
+        run: |
+          NON_FORKED_AND_NON_ROBOT_RUN=${{ ( github.actor != 'renovate[bot]' && github.actor != 'dependabot[bot]' ) && ( github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository ) }}
+          echo "NON_FORKED_AND_NON_ROBOT_RUN=$NON_FORKED_AND_NON_ROBOT_RUN" >> "$GITHUB_OUTPUT"
+
+  build-and-push:
+    name: Build and Push Multi-arch Image
+    needs: prepare_ci_run
+    runs-on: ubuntu-latest
+    if: ${{ needs.prepare_ci_run.outputs.NON_FORKED_AND_NON_ROBOT_RUN == 'true' }}
+    env:
+      DATETIME: ${{ needs.prepare_ci_run.outputs.DATETIME }}
+      BUILD_TIME: ${{ needs.prepare_ci_run.outputs.BUILD_TIME }}
+      GIT_SHA: ${{ needs.prepare_ci_run.outputs.GIT_SHA }}
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=dev-${{ env.DATETIME }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.K8SGPT_BOT_SECRET }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: .
+          file: ./container/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          target: production
+          build-args: |
+            GIT_HASH=${{ env.GIT_SHA }}
+            RELEASE_VERSION=dev-${{ env.DATETIME }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}:${{ env.DATETIME }}
+          labels: ${{ steps.meta.outputs.labels }}
+          secrets: |
+            GIT_AUTH_TOKEN=${{ secrets.K8SGPT_BOT_SECRET }}
