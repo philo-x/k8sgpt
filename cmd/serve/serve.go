@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,8 @@ var (
 	// extraClusters holds additional cluster specs provided via --extra-cluster.
 	// Each element uses the format: "id:kubeconfigPath" or "id:kubeconfigPath:kubecontext".
 	extraClusters []string
+	// extraClustersDir holds the path to a directory containing additional kubeconfigs.
+	extraClustersDir string
 )
 
 // parseExtraCluster parses a single --extra-cluster value.
@@ -254,6 +257,47 @@ var ServeCmd = &cobra.Command{
 				color.Green("Registered extra cluster: id=%q kubeconfig=%q kubecontext=%q", clusterID, kubecfg, kubectx)
 			}
 
+			if extraClustersDir != "" {
+				files, err := os.ReadDir(extraClustersDir)
+				if err != nil {
+					color.Red("Error reading extra-clusters-dir: %v", err)
+					os.Exit(1)
+				}
+				for _, file := range files {
+					if file.IsDir() {
+						continue
+					}
+					name := file.Name()
+					if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+						continue
+					}
+					path := filepath.Join(extraClustersDir, name)
+
+					// Compare with the main kubeconfig to avoid duplicate registration
+					mainKubeconfig := viper.GetString("kubeconfig")
+					if mainKubeconfig != "" {
+						absMain, _ := filepath.Abs(mainKubeconfig)
+						absPath, _ := filepath.Abs(path)
+						if absMain == absPath {
+							continue
+						}
+					}
+
+					clusterID := strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
+
+					// Avoid duplicate registration if the same clusterID is already registered
+					if kubernetes.DefaultManager().HasCluster(clusterID) {
+						continue
+					}
+
+					if _, regErr := kubernetes.DefaultManager().RegisterCluster(clusterID, path, ""); regErr != nil {
+						color.Red("Error registering extra cluster %q from directory (%s): %v", clusterID, path, regErr)
+						os.Exit(1)
+					}
+					color.Green("Registered extra cluster from directory: id=%q kubeconfig=%q", clusterID, path)
+				}
+			}
+
 			// Create and start MCP server
 			mcpServer, err := k8sgptserver.NewMCPServer(mcpPort, aiProvider, mcpHTTP, logger)
 			if err != nil {
@@ -322,4 +366,5 @@ func init() {
 	Example: --extra-cluster "prod:/home/user/.kube/prod.yaml:prod-ctx"
 	         --extra-cluster "staging:/home/user/.kube/staging.yaml"`,
 	)
+	ServeCmd.Flags().StringVar(&extraClustersDir, "extra-clusters-dir", "", "Directory containing extra kubeconfigs to register")
 }
